@@ -5,14 +5,14 @@ from racetrack import RaceTrack
 
 _dt = 0.1
 
-_D_KP = 12.0
+_D_KP = 15.0
 _D_KI = 0.2
-_D_KD = 0.5
+_D_KD = 0.2
 
 _BASE_LOOKAHEAD = 7.0
 _GAIN_LOOKAHEAD = 0.15
-_MIN_LOOKAHEAD = 5.0
-_MAX_LOOKAHEAD = 15.0
+_MIN_LOOKAHEAD = 14
+_MAX_LOOKAHEAD = 35.0
 
 _prev_delta_err = 0.0
 _int_delta_err = 0.0
@@ -172,7 +172,7 @@ def controller(
     # --- look ahead for upcoming corners ---
     HORIZON_DIST = 80.0
     a_y_max_local = 12.0
-    a_y_max_far = 18.0
+    a_y_max_far = 20.0
 
     n = path.shape[0]
     acc = 0.0
