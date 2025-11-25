@@ -9,8 +9,10 @@ from controller import lower_controller, controller
 
 class Simulator:
 
-    def __init__(self, rt : RaceTrack, raceline = None, headless = False):
+    def __init__(self, rt : RaceTrack, raceline = None, headless = False, speed = 1):
         self.headless = headless
+        self.speed = speed  # Render 1 in every 'speed' frames
+        self.frame_counter = 0  # Counter for frame skipping
         
         if not headless:
             matplotlib.rcParams["figure.dpi"] = 200
@@ -35,6 +37,7 @@ class Simulator:
         self.currently_violating = False
         self.simulation_time = 0.0  # Track simulation time independently
         self.lap_start_simulation_time = 0.0  # Track when lap started in simulation time
+        self.trajectory = []  # Store trajectory points [x, y, speed]
 
     def check_track_limits(self):
         car_position = self.car.state[0:2]
@@ -77,15 +80,6 @@ class Simulator:
             if self.lap_finished:
                 exit()
 
-            if not self.headless:
-                self.figure.canvas.flush_events()
-                self.axis.cla()
-
-                self.rt.plot_track(self.axis)
-
-                self.axis.set_xlim(self.car.state[0] - 200, self.car.state[0] + 200)
-                self.axis.set_ylim(self.car.state[1] - 200, self.car.state[1] + 200)
-
             # Always advance simulation by exactly one timestep
             # This ensures consistent simulation time regardless of callback frequency
             desired = controller(self.car.state, self.car.parameters, self.rt)
@@ -102,7 +96,41 @@ class Simulator:
             self.update_status()
             self.check_track_limits()
 
+            # Increment frame counter and check if we should render this frame
+            self.frame_counter += 1
+            should_render = (self.frame_counter % self.speed == 0)
+
+            if not self.headless and should_render:
+                self.figure.canvas.flush_events()
+                self.axis.cla()
+
+                self.rt.plot_track(self.axis)
+
+                self.axis.set_xlim(self.car.state[0] - 200, self.car.state[0] + 200)
+                self.axis.set_ylim(self.car.state[1] - 200, self.car.state[1] + 200)
+
+            # Always track trajectory (even if not rendering this frame)
             if not self.headless:
+                self.trajectory.append([self.car.state[0], self.car.state[1], self.car.state[3]])
+            
+            # Only render when should_render is True
+            if not self.headless and should_render:
+                # Plot trajectory
+                if len(self.trajectory) > 1:
+                    trajectory_array = np.array(self.trajectory)
+                    for i in range(len(trajectory_array) - 1):
+                        speed = trajectory_array[i, 2]
+                        if speed < 20:
+                            color = 'red'
+                        elif speed < 50:
+                            ratio = (speed - 20) / 30
+                            color = (1.0, ratio * 0.65, 0.0)
+                        else:
+                            ratio = (speed - 50) / 50
+                            color = ((1.0 - ratio), 0.65 + ratio * 0.35, 0.0)
+                        self.axis.plot(trajectory_array[i:i+2, 0], trajectory_array[i:i+2, 1], 
+                                     color=color, linewidth=2, alpha=0.8)
+
                 self.axis.arrow(
                     self.car.state[0], self.car.state[1], \
                     self.car.wheelbase*np.cos(self.car.state[4]), \
