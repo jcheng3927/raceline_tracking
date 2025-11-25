@@ -17,6 +17,10 @@ _MAX_LOOKAHEAD = 15.0
 _prev_delta_err = 0.0
 _int_delta_err = 0.0
 
+# time-based blending globals (controller-only)
+_FADE_TIME = 2.0
+_sim_time = 0.0
+
 _track_cache: dict[int, dict[str, np.ndarray]] = {}
 
 
@@ -24,24 +28,47 @@ def _wrap_angle(a: float) -> float:
     return float(np.arctan2(np.sin(a), np.cos(a)))
 
 
-def _reference_polyline(rt: RaceTrack) -> np.ndarray:
+def _blend_factor(t: float) -> float:
+    if t <= 0.0:
+        return 0.0
+    if t >= _FADE_TIME:
+        return 1.0
+    return t / _FADE_TIME
+
+
+def _resample_path(path: np.ndarray, n: int) -> np.ndarray:
+    m = path.shape[0]
+    if m == n:
+        return path
+    idx = np.linspace(0.0, float(m - 1), n)
+    base_idx = np.arange(m, dtype=float)
+    x = np.interp(idx, base_idx, path[:, 0])
+    y = np.interp(idx, base_idx, path[:, 1])
+    return np.column_stack((x, y))
+
+def _reference_polyline(rt: RaceTrack, t: float) -> np.ndarray:
     center = np.asarray(rt.centerline, dtype=float)
     base = center[1:-1]
+
+    alpha = _blend_factor(t)
+
     if hasattr(rt, "raceline") and getattr(rt, "raceline") is not None:
         race = np.asarray(rt.raceline, dtype=float)
-        if race.shape == base.shape:
-            return 0.7 * base + 0.3 * race
-        return race
+        race = _resample_path(race, base.shape[0])
+        return (1.0 - alpha) * base + alpha * race
+
     return base
 
-
-def _track_data(rt: RaceTrack) -> dict[str, np.ndarray]:
+def _track_data(rt: RaceTrack, t: float) -> dict[str, np.ndarray]:
     key = id(rt)
-    cached = _track_cache.get(key)
-    if cached is not None:
-        return cached
 
-    pts = _reference_polyline(rt)
+    # once fade is done, we can safely cache the final blended track
+    if t >= _FADE_TIME:
+        cached = _track_cache.get(key)
+        if cached is not None:
+            return cached
+
+    pts = _reference_polyline(rt, t)
     n = pts.shape[0]
 
     seg = np.diff(pts, axis=0, append=pts[0:1])
@@ -59,7 +86,10 @@ def _track_data(rt: RaceTrack) -> dict[str, np.ndarray]:
             curv[i] = dpsi / ds
 
     data = {"path": pts, "heading": heading, "curvature": curv}
-    _track_cache[key] = data
+
+    if t >= _FADE_TIME:
+        _track_cache[key] = data
+
     return data
 
 
@@ -85,14 +115,20 @@ def _lookahead_index(path: np.ndarray, start_idx: int, distance: float) -> int:
 def controller(
     state: ArrayLike, parameters: ArrayLike, racetrack: RaceTrack
 ) -> ArrayLike:
+    global _sim_time
+
     state = np.asarray(state, dtype=float)
     parameters = np.asarray(parameters, dtype=float)
+
+    # time in this controller module only
+    t = _sim_time
+    _sim_time += _dt
 
     x, y = state[0], state[1]
     v = state[3]
     phi = state[4]
 
-    trk = _track_data(racetrack)
+    trk = _track_data(racetrack, t)
     path = trk["path"]
     curv_path = trk["curvature"]
 
@@ -152,23 +188,19 @@ def controller(
         i = j
         max_kappa_ahead = max(max_kappa_ahead, abs(float(curv_path[i])))
 
-    # long-range speed cap based on upcoming tightest corner
     if max_kappa_ahead > 1e-4:
         v_far = float(np.sqrt(max(a_y_max_far / max_kappa_ahead, 0.0)))
     else:
         v_far = straight_cap
 
-    # local curvature-based cap
     if abs(kappa_track) > 1e-4:
         v_local = float(np.sqrt(max(a_y_max_local / abs(kappa_track), 0.0)))
     else:
         v_local = straight_cap
 
-    # penalize if we're laterally off-line
     e_lat = float(y_rel)
     v_local /= (1.0 + 0.1 * abs(e_lat))
 
-    # overall curve speed
     v_curve = min(v_local, v_far, straight_cap)
 
     v_ref = float(np.clip(v_curve, v_min + 1.0, straight_cap))
@@ -193,7 +225,6 @@ def lower_controller(
     delta_ref = float(desired[0])
     v_ref = float(desired[1])
 
-    # PID controller for steering
     delta_err = _wrap_angle(delta_ref - delta)
     _int_delta_err += delta_err * _dt
     delta_dot = (delta_err - _prev_delta_err) / _dt
@@ -207,7 +238,6 @@ def lower_controller(
 
     v_delta = float(np.clip(v_delta, parameters[7], parameters[9]))
 
-    # Simple proportional velocity control (no PID)
     v_err = v_ref - v
     a = 15.0 * v_err
     a = float(np.clip(a, parameters[8], parameters[10]))
