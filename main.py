@@ -5,9 +5,10 @@ import numpy as np
 from simulator import RaceTrack, Simulator, plt
 
 if __name__ == "__main__":
-    assert len(argv) == 3
+    assert len(argv) >= 3
     track_path = argv[1]
     raceline_path = argv[2]
+    headless = "--headless" in argv
 
     # Load track and attach raceline coordinates to the RaceTrack object
     racetrack = RaceTrack(track_path)
@@ -15,6 +16,7 @@ if __name__ == "__main__":
     # First two columns are x, y of the optimal raceline
     racetrack.raceline = raceline_data[:, :2]
 
-    simulator = Simulator(racetrack)
+    simulator = Simulator(racetrack, headless=headless)
     simulator.start()
-    plt.show()
+    if not headless:
+        plt.show()

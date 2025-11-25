@@ -9,15 +9,22 @@ from controller import lower_controller, controller
 
 class Simulator:
 
-    def __init__(self, rt : RaceTrack, raceline = None):
-        matplotlib.rcParams["figure.dpi"] = 300
-        matplotlib.rcParams["font.size"] = 8
+    def __init__(self, rt : RaceTrack, raceline = None, headless = False):
+        self.headless = headless
+        
+        if not headless:
+            matplotlib.rcParams["figure.dpi"] = 200
+            matplotlib.rcParams["font.size"] = 8
 
         self.rt = rt
         self.raceline = raceline  # Store the raceline
-        self.figure, self.axis = plt.subplots(1, 1)
-
-        self.axis.set_xlabel("X"); self.axis.set_ylabel("Y")
+        
+        if not headless:
+            self.figure, self.axis = plt.subplots(1, 1)
+            self.axis.set_xlabel("X"); self.axis.set_ylabel("Y")
+        else:
+            self.figure = None
+            self.axis = None
 
         self.car = RaceCar(self.rt.initial_state.T)
 
@@ -70,13 +77,14 @@ class Simulator:
             if self.lap_finished:
                 exit()
 
-            self.figure.canvas.flush_events()
-            self.axis.cla()
+            if not self.headless:
+                self.figure.canvas.flush_events()
+                self.axis.cla()
 
-            self.rt.plot_track(self.axis)
+                self.rt.plot_track(self.axis)
 
-            self.axis.set_xlim(self.car.state[0] - 200, self.car.state[0] + 200)
-            self.axis.set_ylim(self.car.state[1] - 200, self.car.state[1] + 200)
+                self.axis.set_xlim(self.car.state[0] - 200, self.car.state[0] + 200)
+                self.axis.set_ylim(self.car.state[1] - 200, self.car.state[1] + 200)
 
             # Always advance simulation by exactly one timestep
             # This ensures consistent simulation time regardless of callback frequency
@@ -94,37 +102,38 @@ class Simulator:
             self.update_status()
             self.check_track_limits()
 
-            self.axis.arrow(
-                self.car.state[0], self.car.state[1], \
-                self.car.wheelbase*np.cos(self.car.state[4]), \
-                self.car.wheelbase*np.sin(self.car.state[4])
-            )
+            if not self.headless:
+                self.axis.arrow(
+                    self.car.state[0], self.car.state[1], \
+                    self.car.wheelbase*np.cos(self.car.state[4]), \
+                    self.car.wheelbase*np.sin(self.car.state[4])
+                )
 
-            self.axis.text(
-                self.car.state[0] + 195, self.car.state[1] + 195, "Lap completed: " + str(self.lap_finished),
-                horizontalalignment="right", verticalalignment="top",
-                fontsize=8, color="Red"
-            )
+                self.axis.text(
+                    self.car.state[0] + 195, self.car.state[1] + 195, "Lap completed: " + str(self.lap_finished),
+                    horizontalalignment="right", verticalalignment="top",
+                    fontsize=8, color="Red"
+                )
 
-            self.axis.text(
-                self.car.state[0] + 195, self.car.state[1] + 170, "Lap time: " + f"{self.lap_time_elapsed:.2f}",
-                horizontalalignment="right", verticalalignment="top",
-                fontsize=8, color="Red"
-            )
+                self.axis.text(
+                    self.car.state[0] + 195, self.car.state[1] + 170, "Lap time: " + f"{self.lap_time_elapsed:.2f}",
+                    horizontalalignment="right", verticalalignment="top",
+                    fontsize=8, color="Red"
+                )
 
-            self.axis.text(
-                self.car.state[0] + 195, self.car.state[1] + 155, "Track violations: " + str(self.track_limit_violations),
-                horizontalalignment="right", verticalalignment="top",
-                fontsize=8, color="Red"
-            )
+                self.axis.text(
+                    self.car.state[0] + 195, self.car.state[1] + 155, "Track violations: " + str(self.track_limit_violations),
+                    horizontalalignment="right", verticalalignment="top",
+                    fontsize=8, color="Red"
+                )
 
-            self.axis.text(
-                self.car.state[0] + 195, self.car.state[1] + 140, "Speed: " + f"{self.car.state[3]:.1f} m/s",
-                horizontalalignment="right", verticalalignment="top",
-                fontsize=8, color="Red"
-            )
+                self.axis.text(
+                    self.car.state[0] + 195, self.car.state[1] + 140, "Speed: " + f"{self.car.state[3]:.1f} m/s",
+                    horizontalalignment="right", verticalalignment="top",
+                    fontsize=8, color="Red"
+                )
 
-            self.figure.canvas.draw()
+                self.figure.canvas.draw()
             return True
 
         except KeyboardInterrupt:
@@ -166,7 +175,12 @@ class Simulator:
                 print(f"Warning: Could not save results to file: {e}")
 
     def start(self):
-        # Run the simulation loop every 1 millisecond.
-        self.timer = self.figure.canvas.new_timer(interval=1)
-        self.timer.add_callback(self.run)
-        self.timer.start()
+        if self.headless:
+            # In headless mode, run simulation loop directly without timer
+            while not self.lap_finished:
+                self.run()
+        else:
+            # Run the simulation loop every 1 millisecond with GUI
+            self.timer = self.figure.canvas.new_timer(interval=1)
+            self.timer.add_callback(self.run)
+            self.timer.start()

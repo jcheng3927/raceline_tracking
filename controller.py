@@ -1,25 +1,18 @@
 import numpy as np
 from numpy.typing import ArrayLike
 
-from simulator import RaceTrack
+from racetrack import RaceTrack
 
 _dt = 0.1
 
-_V_KP = 1.5
-_V_KI = 0.15
-_V_KD = 0.05
+_D_KP = 12.0
+_D_KI = 0.2
+_D_KD = 0.5
 
-_D_KP = 3.0
-_D_KI = 0.0
-_D_KD = 0.4
-
-_BASE_LOOKAHEAD = 8.0
+_BASE_LOOKAHEAD = 7.0
 _GAIN_LOOKAHEAD = 0.15
 _MIN_LOOKAHEAD = 5.0
 _MAX_LOOKAHEAD = 15.0
-
-_prev_v_err = 0.0
-_int_v_err = 0.0
 
 _prev_delta_err = 0.0
 _int_delta_err = 0.0
@@ -37,7 +30,7 @@ def _reference_polyline(rt: RaceTrack) -> np.ndarray:
     if hasattr(rt, "raceline") and getattr(rt, "raceline") is not None:
         race = np.asarray(rt.raceline, dtype=float)
         if race.shape == base.shape:
-            return 0.5 * (base + race)
+            return 0.7 * base + 0.3 * race
         return race
     return base
 
@@ -138,19 +131,47 @@ def controller(
     v_min = float(parameters[2])
     v_max = float(parameters[5])
 
-    straight_cap = min(v_max, 70.0)
-    a_y_max = 10.0
+    straight_cap = min(v_max, 85.0)
 
-    if abs(kappa_track) > 1e-4:
-        v_curve = np.sqrt(max(a_y_max / abs(kappa_track), 0.0))
+    # --- look ahead for upcoming corners ---
+    HORIZON_DIST = 80.0
+    a_y_max_local = 12.0
+    a_y_max_far = 18.0
+
+    n = path.shape[0]
+    acc = 0.0
+    i = idx_look
+    max_kappa_ahead = abs(kappa_track)
+
+    while acc < HORIZON_DIST:
+        j = (i + 1) % n
+        step = float(np.linalg.norm(path[j] - path[i]))
+        if step < 1e-6:
+            break
+        acc += step
+        i = j
+        max_kappa_ahead = max(max_kappa_ahead, abs(float(curv_path[i])))
+
+    # long-range speed cap based on upcoming tightest corner
+    if max_kappa_ahead > 1e-4:
+        v_far = float(np.sqrt(max(a_y_max_far / max_kappa_ahead, 0.0)))
     else:
-        v_curve = straight_cap
+        v_far = straight_cap
 
+    # local curvature-based cap
+    if abs(kappa_track) > 1e-4:
+        v_local = float(np.sqrt(max(a_y_max_local / abs(kappa_track), 0.0)))
+    else:
+        v_local = straight_cap
+
+    # penalize if we're laterally off-line
     e_lat = float(y_rel)
-    v_curve /= (1.0 + 0.2 * abs(e_lat))
+    v_local /= (1.0 + 0.1 * abs(e_lat))
 
-    v_ref = min(straight_cap, v_curve)
-    v_ref = float(np.clip(v_ref, v_min + 1.0, straight_cap))
+    # overall curve speed
+    v_curve = min(v_local, v_far, straight_cap)
+
+    v_ref = float(np.clip(v_curve, v_min + 1.0, straight_cap))
 
     return np.array([delta_ref, v_ref], dtype=float)
 
@@ -158,7 +179,6 @@ def controller(
 def lower_controller(
     state: ArrayLike, desired: ArrayLike, parameters: ArrayLike
 ) -> ArrayLike:
-    global _prev_v_err, _int_v_err
     global _prev_delta_err, _int_delta_err
 
     state = np.asarray(state, dtype=float)
@@ -173,6 +193,7 @@ def lower_controller(
     delta_ref = float(desired[0])
     v_ref = float(desired[1])
 
+    # PID controller for steering
     delta_err = _wrap_angle(delta_ref - delta)
     _int_delta_err += delta_err * _dt
     delta_dot = (delta_err - _prev_delta_err) / _dt
@@ -186,12 +207,9 @@ def lower_controller(
 
     v_delta = float(np.clip(v_delta, parameters[7], parameters[9]))
 
+    # Simple proportional velocity control (no PID)
     v_err = v_ref - v
-    _int_v_err += v_err * _dt
-    v_dot = (v_err - _prev_v_err) / _dt
-    _prev_v_err = v_err
-
-    a = _V_KP * v_err + _V_KI * _int_v_err + _V_KD * v_dot
+    a = 15.0 * v_err
     a = float(np.clip(a, parameters[8], parameters[10]))
 
     return np.array([v_delta, a], dtype=float)
