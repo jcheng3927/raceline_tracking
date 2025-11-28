@@ -11,7 +11,7 @@ _D_KD = 0.2
 
 _BASE_LOOKAHEAD = 7.0
 _GAIN_LOOKAHEAD = 0.15
-_MIN_LOOKAHEAD = 14
+_MIN_LOOKAHEAD = 13.5
 _MAX_LOOKAHEAD = 35.0
 
 _prev_delta_err = 0.0
@@ -74,10 +74,12 @@ def _track_data(rt: RaceTrack, t: float) -> dict[str, np.ndarray]:
     seg = np.diff(pts, axis=0, append=pts[0:1])
     heading = np.arctan2(seg[:, 1], seg[:, 0])
 
+    # Calculate raw curvature using a wider window for more stable estimates
     curv = np.zeros(n)
+    window = 3  # Use points ±3 steps away for smoother curvature
     for i in range(n):
-        ip = (i - 1) % n
-        inx = (i + 1) % n
+        ip = (i - window) % n
+        inx = (i + window) % n
         ds = float(np.linalg.norm(pts[inx] - pts[ip]))
         if ds < 1e-6:
             curv[i] = 0.0
@@ -167,12 +169,15 @@ def controller(
     v_min = float(parameters[2])
     v_max = float(parameters[5])
 
-    straight_cap = min(v_max, 85.0)
+    straight_cap = min(v_max, 88)
 
     # --- look ahead for upcoming corners ---
     HORIZON_DIST = 80.0
-    a_y_max_local = 12.0
-    a_y_max_far = 20.0
+    
+    # Use higher lateral acceleration limits for wide turns (low curvature)
+    # Sharp turns (high curvature) need lower limits for safety
+    a_y_max_base = 14.0  # Base lateral acceleration
+    a_y_max_far = 22.0   # For lookahead planning
 
     n = path.shape[0]
     acc = 0.0
@@ -193,17 +198,27 @@ def controller(
     else:
         v_far = straight_cap
 
-    if abs(kappa_track) > 1e-4:
-        v_local = float(np.sqrt(max(a_y_max_local / abs(kappa_track), 0.0)))
+    # For local speed: adjust lateral acceleration based on curvature magnitude
+    # Wide turns (low kappa) can handle higher a_y, sharp turns need lower a_y
+    abs_kappa = abs(kappa_track)
+    if abs_kappa > 1e-4:
+        # For wide turns (low curvature), allow higher lateral acceleration
+        # Curvature threshold: ~0.01 is a wide turn, ~0.05+ is sharp
+        kappa_sharpness = min(abs_kappa / 0.04, 1.0)  # 0 for wide, 1 for sharp
+        a_y_local = a_y_max_base + (1.0 - kappa_sharpness) * 4.0  # Up to 18 for wide turns
+        v_local = float(np.sqrt(max(a_y_local / abs_kappa, 0.0)))
     else:
         v_local = straight_cap
 
     e_lat = float(y_rel)
-    v_local /= (1.0 + 0.1 * abs(e_lat))
+    v_local /= (1.0 + 0.08 * abs(e_lat)) 
 
     v_curve = min(v_local, v_far, straight_cap)
 
     v_ref = float(np.clip(v_curve, v_min + 1.0, straight_cap))
+    
+    # OOGA BOOGA SPEED BOOST
+    #v_ref *= 2
 
     return np.array([delta_ref, v_ref], dtype=float)
 
